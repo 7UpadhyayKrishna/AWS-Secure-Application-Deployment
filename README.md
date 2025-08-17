@@ -55,7 +55,7 @@ Developer → GitHub → Jenkins → Docker Build → ECR → Bastion Host → P
 
 ## 📜 Jenkinsfile (Simplified Example)
 
-grovee''
+
 pipeline {
     agent any
 
