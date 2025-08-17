@@ -54,43 +54,62 @@ Developer → GitHub → Jenkins → Docker Build → ECR → Bastion Host → P
 ---
 
 ## 📜 Jenkinsfile (Simplified Example)
-```groovy
 pipeline {
-  agent any
-  environment {
-    AWS_REGION    = 'ap-south-1'
-    ECR_REGISTRY  = '<account>.dkr.ecr.ap-south-1.amazonaws.com'
-    ECR_REPO_NAME = 'my-project'
-    ECR_REPO      = "${ECR_REGISTRY}/${ECR_REPO_NAME}"
-    IMAGE_TAG     = "${BUILD_NUMBER}"
-    BASTION_HOST  = "<PUBLIC_EC2_IP>"
-    PRIVATE_HOST  = "10.0.2.128"
-  }
-  stages {
-    stage('Build & Push') {
-      steps {
-        sh '''
-          docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-          aws ecr get-login-password --region ${AWS_REGION} \
-            | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-          docker push ${ECR_REPO}:${IMAGE_TAG}
-        '''
-      }
+    agent any
+
+    environment {
+        AWS_REGION = 'ap-south-1'
+        AWS_CREDENTIALS = credentials('aws-creds')
+        ECR_REPO = '897722705527.dkr.ecr.ap-south-1.amazonaws.com/my-project'
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
-    stage('Deploy') {
-      steps {
-        sshagent(['bastion-ssh-key']) {
-          sh '''
-            ssh -A ec2-user@${BASTION_HOST} ssh ec2-user@${PRIVATE_HOST} '
-              aws ecr get-login-password --region ${AWS_REGION} \
-                | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-              docker rm -f nodeapp || true
-              docker pull ${ECR_REPO}:${IMAGE_TAG}
-              docker run -d --name nodeapp -p 3000:3000 ${ECR_REPO}:${IMAGE_TAG}
-            '
-          '''
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
         }
-      }
+
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t $ECR_REPO:$IMAGE_TAG ."
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh """
+                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                        aws ecr get-login-password --region $AWS_REGION \
+                        | docker login --username AWS --password-stdin $ECR_REPO
+                    """
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh "docker push $ECR_REPO:$IMAGE_TAG"
+            }
+        }
+
+        stage('Deploy on Private EC2') {
+            steps {
+                sshagent(['ec2-ssh-key']) {
+                    sh """
+                        ssh -i /home/ec2-user/test1.pem -o StrictHostKeyChecking=no ec2-user@10.0.2.128 '
+                            aws ecr get-login-password --region $AWS_REGION \
+                            | docker login --username AWS --password-stdin $ECR_REPO &&
+                            docker rm -f nodeapp || true &&
+                            docker pull $ECR_REPO:$IMAGE_TAG &&
+                            docker run -d --name nodeapp -p 3000:3000 $ECR_REPO:$IMAGE_TAG
+                        '
+                    """
+                }
+            }
+        }
     }
-  }
 }
